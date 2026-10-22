@@ -138,6 +138,21 @@ func channelTestAPIFormat(channel *biz.Channel, model string) llm.APIFormat {
 		if filtered := FilterEndpointsByAPIFormats(endpoints, forced); len(filtered) > 0 {
 			endpoints = filtered[:1]
 		}
+		hasChat := false
+		for _, endpoint := range endpoints {
+			if endpoint.APIFormat == llm.APIFormatOpenAIChatCompletion.String() {
+				hasChat = true
+				break
+			}
+		}
+		if hasChat {
+			for _, endpoint := range endpoints {
+				if endpoint.APIFormat == llm.APIFormatOpenAIDecisions.String() {
+					return llm.APIFormatOpenAIDecisions
+				}
+			}
+			return llm.APIFormatOpenAIChatCompletion
+		}
 		for _, endpoint := range endpoints {
 			if endpoint.APIFormat == llm.APIFormatOpenAIDecisions.String() {
 				return llm.APIFormatOpenAIDecisions
@@ -175,6 +190,9 @@ func usesResponsesWebSocket(channel *biz.Channel) bool {
 	}
 
 	for _, endpoint := range channel.ResolveEndpoints() {
+		if endpoint.APIFormat == llm.APIFormatOpenAIResponseWebSocket.String() {
+			return true
+		}
 		if endpoint.APIFormat != llm.APIFormatOpenAIResponse.String() && endpoint.APIFormat != llm.APIFormatOpenAIResponseCompact.String() {
 			continue
 		}
@@ -389,6 +407,12 @@ func (processor *TestChannelOrchestrator) handleStreamResponse(
 
 	// Accumulate stream chunks
 	var accumulatedContent string
+	expectedChoices := 0
+	if expected, ok := stream.(interface{ ExpectedStreamChoices() int }); ok {
+		expectedChoices = expected.ExpectedStreamChoices()
+	}
+	terminalTracker := NewStreamTerminalTracker(expectedChoices)
+	terminalSeen := false
 
 	for stream.Next() {
 		select {
@@ -405,6 +429,9 @@ func (processor *TestChannelOrchestrator) handleStreamResponse(
 		event := stream.Current()
 		if event == nil {
 			continue
+		}
+		if !terminalSeen && terminalTracker.Observe(event) {
+			terminalSeen = true
 		}
 
 		// The stream may end with a "[DONE]" message which is not valid JSON.
@@ -453,6 +480,17 @@ func (processor *TestChannelOrchestrator) handleStreamResponse(
 			Message: lo.ToPtr(""),
 			Error:   lo.ToPtr("No content in stream response"),
 		}, nil
+	}
+	if !terminalSeen {
+		return &TestChannelResult{
+			Latency: latency,
+			Success: false,
+			Message: lo.ToPtr(accumulatedContent),
+			Error:   lo.ToPtr("Stream ended without terminal event"),
+		}, nil
+	}
+	if observer, ok := stream.(streams.DeliveryAcknowledger); ok {
+		observer.AcknowledgeDelivery()
 	}
 
 	return &TestChannelResult{
