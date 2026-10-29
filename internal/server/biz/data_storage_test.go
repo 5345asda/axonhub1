@@ -96,7 +96,7 @@ func createTestDataStorage(t *testing.T, client *ent.Client, ctx context.Context
 	settings := &objects.DataStorageSettings{}
 
 	if dsType == datastorage.TypeFs {
-		dir := "/tmp/test"
+		dir := t.TempDir()
 		settings.Directory = &dir
 	}
 

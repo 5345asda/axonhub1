@@ -2,6 +2,7 @@ package live
 
 import (
 	"context"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -62,11 +63,21 @@ func TestCache(t *testing.T) {
 }
 
 func TestCache_SingleFlight(t *testing.T) {
+	previousMaxProcs := runtime.GOMAXPROCS(1)
+	t.Cleanup(func() {
+		runtime.GOMAXPROCS(previousMaxProcs)
+	})
+
 	var callCount int32
+	refreshStarted := make(chan struct{}, 1)
+	releaseRefresh := make(chan struct{})
 
 	refreshFunc := func(ctx context.Context, current string, lastUpdate time.Time) (string, time.Time, bool, error) {
-		atomic.AddInt32(&callCount, 1)
-		time.Sleep(100 * time.Millisecond) // Simulate slow load
+		if atomic.AddInt32(&callCount, 1) == 1 {
+			refreshStarted <- struct{}{}
+		}
+
+		<-releaseRefresh
 
 		return "data", time.Now(), true, nil
 	}
@@ -78,19 +89,36 @@ func TestCache_SingleFlight(t *testing.T) {
 	})
 	defer cache.Stop()
 
-	// Concurrent loads
-	done := make(chan bool)
+	const callers = 5
+	done := make(chan error, callers)
 
-	for range 5 {
+	go func() {
+		done <- cache.Load(context.Background(), true)
+	}()
+
+	<-refreshStarted
+
+	// Keep the first refresh open, then yield each follower into the existing singleflight call.
+	ready := make(chan struct{}, callers-1)
+	for range callers - 1 {
 		go func() {
-			_ = cache.Load(context.Background(), true)
-
-			done <- true
+			ready <- struct{}{}
+			done <- cache.Load(context.Background(), true)
 		}()
 	}
 
-	for range 5 {
-		<-done
+	for range callers - 1 {
+		<-ready
+	}
+
+	for range (callers - 1) * 2 {
+		runtime.Gosched()
+	}
+
+	close(releaseRefresh)
+
+	for range callers {
+		require.NoError(t, <-done)
 	}
 
 	// Should only be called once due to SingleFlight
