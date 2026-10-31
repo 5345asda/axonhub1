@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/looplj/axonhub/internal/authz"
@@ -47,6 +48,43 @@ type UpdateChannelSettingsInput struct {
 	APIKeyRoundRobinSwitchAfter *int                                  `json:"apiKeyRoundRobinSwitchAfter"`
 	ProviderQuota               *objects.ChannelProviderQuotaSettings `json:"providerQuota"`
 	QuotaRoutingMode            *objects.QuotaRoutingMode             `json:"quotaRoutingMode"`
+}
+
+// channelSettingsLock is reference-counted so idle channel IDs do not remain
+// in ChannelService's in-process lock map.
+type channelSettingsLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// lockChannelSettings serializes same-process settings patches for one
+// channel. It complements, rather than replaces, the database version guard
+// used to detect concurrent writers in other processes.
+func (svc *ChannelService) lockChannelSettings(id int) func() {
+	svc.channelSettingsLocksMu.Lock()
+	if svc.channelSettingsLocks == nil {
+		svc.channelSettingsLocks = make(map[int]*channelSettingsLock)
+	}
+	lock := svc.channelSettingsLocks[id]
+	if lock == nil {
+		lock = &channelSettingsLock{}
+		svc.channelSettingsLocks[id] = lock
+	}
+	lock.refs++
+	svc.channelSettingsLocksMu.Unlock()
+
+	lock.mu.Lock()
+
+	return func() {
+		lock.mu.Unlock()
+
+		svc.channelSettingsLocksMu.Lock()
+		lock.refs--
+		if lock.refs == 0 {
+			delete(svc.channelSettingsLocks, id)
+		}
+		svc.channelSettingsLocksMu.Unlock()
+	}
 }
 
 // Apply returns the settings that result from applying the patch to base.
@@ -151,6 +189,9 @@ func withChannelExpectedVersion(ctx context.Context, updatedAt time.Time) contex
 // patches to different fields both survive instead of the last write silently
 // erasing the other.
 func (svc *ChannelService) UpdateChannelSettings(ctx context.Context, id int, input *UpdateChannelSettingsInput) (*ent.Channel, error) {
+	unlock := svc.lockChannelSettings(id)
+	defer unlock()
+
 	// Each conflict round lets at least one patch commit, so a handful of
 	// attempts resolves any realistic contention; the bound keeps a pathologically
 	// contended channel from retrying forever.
