@@ -8,6 +8,9 @@ on:
 jobs:
   prepare:
     name: Pin commit & date
+    # Docker Hub's unstable images belong to the canonical upstream project.
+    # Forks publish their release images through docker-publish.yml instead.
+    if: github.repository == 'looplj/axonhub'
     runs-on: ubuntu-slim
     permissions:
       contents: read
