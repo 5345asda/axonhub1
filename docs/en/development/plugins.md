@@ -132,7 +132,7 @@ From this repository:
 go run -C cmd/pack-plugin . ../../plugins/examples/<name>
 ```
 
-The default output is `<directory-name>.axplugin` next to the plugin directory. The output must be outside that directory; a path inside it fails. `*.axplugin` is gitignored. Root `README.md`, `.DS_Store`, and `.git` are left out. Any other file that is not `manifest.json`, not under `ui/`, and not reachable by a static relative import from `plugin.js` fails the pack. Tests, `package.json`, `.github`, and `.gitignore` inside the plugin directory fail it. When the Git repository root is the plugin, copy `manifest.json`, `plugin.js`, its static imports, and `ui/` into a directory that contains only those files, then pack that directory.
+The default output is `<directory-name>.axplugin` next to the plugin directory. The output must be outside that directory; a path inside it fails. `*.axplugin` is gitignored. The package contains only `manifest.json`, files under `ui/`, root `plugin.js`, and files that `plugin.js` reaches through static relative imports. Every other file, such as `README.md`, `.git`, `.github`, `.claude`, `node_modules`, tests, and `package.json`, is left out, and the command prints the skipped paths. A directory that holds no packed file is listed once, for example `.git/`. Files loaded only through dynamic `import()` are not collected, so check the skipped list before you upload. A symlink fails the pack only when it would be packed: `manifest.json`, `plugin.js`, anything under `ui/`, or an imported file.
 
 Upload that zip on `/plugins` to try it. Publishing it on the official index is a separate step, below.
 
@@ -156,6 +156,7 @@ Fields use camelCase. A field that is not open is rejected at install and is not
 | `hooks.attempt` | no | Object: enabled is required; true requires non-empty apiFormats and an onAttempt export; false keeps configuration without running it |
 | `configSchema` | no | JSON Schema object, described below |
 | `ui.pages` | no | Sidebar pages, described below |
+| `ui.actions` | no | Global toolbar actions that open plugin dialogs |
 
 Open permissions: `read_channels`, `read_requests`, `read_dashboard`, `read_api_keys`, `read_projects`, `read_settings`, `write_channels`, `webhook`. Outbound URLs go in `network`. `read_plugins` and `write_plugins` are user scopes, not plugin permissions. KV is not a permission.
 
@@ -318,6 +319,28 @@ export function onEvent(ctx, event) {
 
 Pages call `pluginKVList(namespace, prefix, first, after)` through `axonhub.graphql`. Its result also has `entries` and `nextCursor`, but fields must be explicitly selected in GraphQL. GraphQL accepts `after: null` for the first page. `pluginKV` returns a complete entry or `null`, `setPluginKV` returns an entry, and `deletePluginKV` returns a boolean; unlike `ctx.kv.get`, `pluginKV` does not return just the value string.
 
+## Global toolbar actions
+
+`ui.actions` registers actions in the top-right controls of the authenticated layout. The host renders buttons and only loads an iframe after a click. Desktop shows up to two buttons with the remainder in an overflow menu; mobile uses one menu.
+
+```json
+"ui": {
+  "actions": [{
+    "key": "notes",
+    "slot": "app.header.actions",
+    "title": { "en": "Quick notes", "zh-CN": "随手记" },
+    "icon": "puzzle",
+    "effect": { "type": "dialog", "entry": "ui/notes.html" }
+  }]
+}
+```
+
+The first version only accepts slot `app.header.actions` and effect type `dialog`. Keys, titles and entry paths follow page rules; action keys are unique within actions. The optional icon defaults to puzzle and accepts puzzle/search/activity/settings. Unknown fields, slots and effects are rejected. Panels and channel menu actions are not supported.
+
+Dialogs reuse the same Bridge, resources and permission checks. Actions-only plugins can use GraphQL, KV and granted fetch rules. Initialization includes the action key, slot, `context: {}`, `page: null` and `panel: null`. Global actions always receive `projectId: null`; their requests do not inherit the selected project header. Ordinary pages retain their existing project context. Closing cancels pending requests; reopening creates an independent session. Navigation closes the dialog.
+
+Adding an action requires upgrade preview confirmation for enabled plugins. See the packable [toolbar-notes example](../../../plugins/examples/toolbar-notes/README.md).
+
 ## Pages
 
 Each page is an iframe in the authenticated layout. The sidebar entry is under **Plugins**. The route is `/plugins/<plugin id>/pages/<key>`. The iframe cannot read the host cookie or `localStorage`.
@@ -341,9 +364,11 @@ type ThemeSnapshot = {
 type InitSnapshot = ThemeSnapshot & {
   locale: string;
   projectId: number | null;
-  page: string;
+  page: string | null;
   panel: null;
-  slot: null;
+  action: string | null;
+  slot: "app.header.actions" | null;
+  context: Record<string, unknown>;
   config: Record<string, unknown>;
   canWriteKV: boolean;
 };

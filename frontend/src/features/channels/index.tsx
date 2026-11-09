@@ -21,7 +21,6 @@ import {
   useChannelProbeData,
   type ChannelListColumnVisibility,
 } from './data/channels';
-import { useProvidersData } from '@/features/models/data/providers';
 import { useQuotaRoutingSettings } from '@/features/system/data/system';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '@/stores/authStore';
@@ -30,7 +29,6 @@ const ChannelsDialogs = lazy(() => import('./components/channels-dialogs').then(
 
 function ChannelsContent() {
   const { t } = useTranslation();
-  useProvidersData();
   const { channelPermissions, hasSystemScope } = usePermissions();
   const { data: quotaRoutingSettings } = useQuotaRoutingSettings();
   const queryClient = useQueryClient();
@@ -182,9 +180,9 @@ function ChannelsContent() {
 
   const channelsWithProbeData = useMemo(() => {
     if (!data?.edges) return [];
-    
+
     const probeMap = new Map(probeData?.map((probe) => [probe.channelID, probe.points]) || []);
-    
+
     return data.edges.map((edge) => ({
       ...edge.node,
       probePoints: probeMap.get(edge.node.id) || [],
