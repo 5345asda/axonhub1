@@ -28,8 +28,8 @@ export default {
     source: "en",
   },
   updates: {
-    publicKey: "LYrEj4DGOQLR67inUsimJ/vVDyieh34+x8nQIros2iU=",
-    github: "looplj/axonhub",
+    publicKey: "hsiQLgUfL9E2cP781ZouqSjyscsIHcj1O/wvyOZvUaQ=",
+    github: "5345asda/axonhub1",
     tagPrefix: "v",
     changelog: "../../tmp/desktop-release-notes.md",
   },
